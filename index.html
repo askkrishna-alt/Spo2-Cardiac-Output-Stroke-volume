@@ -34,6 +34,19 @@ input{width:90px;background:#081321;color:white;border:1px solid #304862;border-
 <div class="m"><span>Perfusion index</span><b id="pi">—</b>%</div>
 </div><div id="quality" class="notice">Waiting for a stable signal.</div></section>
 
+<section>
+<h2>Validation capture</h2>
+<div class="notice good"><b>45-second validation:</b> keep the fingertip still with gentle constant pressure and record simultaneous reference HR and SpO₂. Enter SV/CO reference values only when available from an accepted reference method.</div>
+<div class="row">
+<div class="field"><label>Reference HR (bpm)</label><input id="refHR" type="number" placeholder="ECG / monitor"></div>
+<div class="field"><label>Reference SpO₂ (%)</label><input id="refO2" type="number" placeholder="validated oximeter"></div>
+<div class="field"><label>Reference SV (mL)</label><input id="refSVv" type="number" placeholder="reference"></div>
+<div class="field"><label>Reference CO (L/min)</label><input id="refCOv" type="number" placeholder="reference"></div>
+</div>
+<button id="captureBtn">Start 45-s validation capture</button>
+<button id="exportBtn" disabled>Export CSV</button>
+<div id="captureStatus" class="muted">No validation capture active.</div>
+</section>
 <section><h2>Subject / research calibration</h2>
 <label>Age <input id="age" type="number" value="45"></label>
 <label>Height cm <input id="ht" type="number" value="170"></label>
@@ -106,5 +119,35 @@ function simulate(){stop();clearAll();mode='sim';$('status').textContent='Simula
 function clearAll(){raw=[];rgb=[];tm=[];f=[];beats=[];['hr','spo2','sv','co','sq','pi'].forEach(x=>$(x).textContent='—');draw()}
 function calibrate(){let s=+$('rsp').value,v=+$('rsv').value;if(s)cal.spo=s;if(v)cal.sv=v;$('status').textContent='Session reference calibration applied.'}
 function resetCal(){cal={spo:null,sv:null};$('status').textContent='Calibration reset.'}
+let validationRows=[],capturing=false,captureStarted=0;
+function captureTick(){
+ if(!capturing)return;
+ validationRows.push({
+  t:tm.length?tm.at(-1):0,
+  ppg:raw.length?raw.at(-1):'',
+  red:rgb.length?rgb.at(-1)[0]:'',
+  green:rgb.length?rgb.at(-1)[1]:'',
+  blue:rgb.length?rgb.at(-1)[2]:'',
+  hr:$('hr').textContent,spo2:$('spo2').textContent,sv:$('sv').textContent,
+  co:$('co').textContent,sq:$('sq').textContent,pi:$('pi').textContent
+ });
+ if(performance.now()/1000-captureStarted>=45){
+  capturing=false;
+  $('captureStatus').textContent='45-second capture complete. Export the CSV and keep the reference values with it.';
+  $('exportBtn').disabled=false;
+ }
+}
+setInterval(captureTick,200);
+$('captureBtn').onclick=()=>{
+ validationRows=[];capturing=true;captureStarted=performance.now()/1000;
+ $('captureStatus').textContent='Capturing 45 seconds — keep finger still and maintain gentle pressure.';
+};
+$('exportBtn').onclick=()=>{
+ let h=['time','ppg','red','green','blue','estimatedHR','estimatedSpO2','estimatedSV','estimatedCO','signalQuality','perfusionIndex','referenceHR','referenceSpO2','referenceSV','referenceCO'];
+ let rows=[h.join(',')],rh=$('refHR').value,ro=$('refO2').value,rs=$('refSVv').value,rc=$('refCOv').value;
+ validationRows.forEach(x=>rows.push([x.t,x.ppg,x.red,x.green,x.blue,x.hr,x.spo2,x.sv,x.co,x.sq,x.pi,rh,ro,rs,rc].join(',')));
+ let blob=new Blob([rows.join('\n')],{type:'text/csv'}),a=document.createElement('a');
+ a.href=URL.createObjectURL(blob);a.download='CardioPPG_validation_'+Date.now()+'.csv';a.click();
+};
 draw();
 </script></body></html>
