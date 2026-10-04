@@ -19,9 +19,9 @@ input{width:90px;background:#081321;color:white;border:1px solid #304862;border-
 
 <div class="grid"><div>
 <section><h2>Live PPG</h2><canvas id="chart" width="1100" height="350"></canvas>
-<button onclick="start()">Start camera</button><button onclick="stop()">Stop</button><button onclick="simulate()">Simulation</button><button onclick="clearAll()">Clear</button>
+<button onclick="start()">Start camera</button><button onclick="stop()">Stop</button><button onclick="simulate()">Simulation</button><button onclick="clearAll()">Clear</button><button onclick="toggleTorch()" id="torchBtn">Turn flash ON</button>
 <div id="status" class="muted">Cover the rear camera and flash with the fingertip. Use gentle, steady pressure.</div></section>
-<section><h2>Camera</h2><video id="video" autoplay muted playsinline></video></section>
+<section><h2>Camera</h2><div class='muted'>V4 attempts hardware torch control through the browser. Support depends on the phone camera and browser.</div><video id="video" autoplay muted playsinline></video></section>
 </div>
 
 <div>
@@ -69,7 +69,7 @@ input{width:90px;background:#081321;color:white;border:1px solid #304862;border-
 
 <script>
 const C=document.getElementById('chart'),X=C.getContext('2d'),V=document.getElementById('video');
-let raw=[],rgb=[],tm=[],f=[],beats=[],stream=null,raf=0,mode='idle',cal={spo:null,sv:null};
+let raw=[],rgb=[],tm=[],f=[],beats=[],stream=null,raf=0,mode='idle',cal={spo:null,sv:null},videoTrack=null,torchOn=false;
 const $=x=>document.getElementById(x),mean=a=>a.length?a.reduce((x,y)=>x+y,0)/a.length:0;
 function sd(a){let m=mean(a);return Math.sqrt(mean(a.map(x=>(x-m)**2)))}
 function med(a){if(!a.length)return 0;let b=[...a].sort((x,y)=>x-y);return b[Math.floor(b.length/2)]}
@@ -113,9 +113,41 @@ function draw(){
 function table(){let n=fs(),h=beats.map((b,i)=>{let p=beats[i-1],d=p?(b.pk-p.pk)/n:0;return '<tr><td>'+(i+1)+'</td><td>'+(p?d.toFixed(3):'—')+'</td><td>'+(p?(60/d).toFixed(0):'—')+'</td><td>'+b.pk+'</td><td>'+b.notch+'</td><td>'+b.diastolic+'</td><td>'+(b.delay*1000).toFixed(0)+' ms</td></tr>'}).join('');$('rows').innerHTML=h||'<tr><td colspan="7">No beats detected.</td></tr>'}
 function push(r,g,b,t){raw.push(-r/255);rgb.push([r,g,b]);tm.push(t);while(tm[0]<t-18){tm.shift();raw.shift();rgb.shift()}process();if(t-(push.last||0)>.12){detect();push.last=t}}
 function loop(){if(mode==='idle')return;let t=performance.now()/1000;if(mode==='sim'){let T=60/72,p=(t%T)/T,y=Math.exp(-Math.pow((p-.18)/.065,2))*1.2-Math.exp(-Math.pow((p-.49)/.035,2))*.28+Math.exp(-Math.pow((p-.60)/.075,2))*.34;push(120-y*30,92-y*8,85-y*4,t);raf=requestAnimationFrame(loop);return}if(V.readyState>=2){let z=document.createElement('canvas'),q=z.getContext('2d');z.width=200;z.height=120;q.drawImage(V,0,0,200,120);let d=q.getImageData(30,20,140,80).data,r=[],g=[],b=[];for(let i=0;i<d.length;i+=4){r.push(d[i]);g.push(d[i+1]);b.push(d[i+2])}push(mean(r),mean(g),mean(b),t)}raf=requestAnimationFrame(loop)}
-async function start(){try{stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'},width:{ideal:1280},height:{ideal:720}},audio:false});V.srcObject=stream;mode='cam';$('status').textContent='Camera active — cover lens + flash completely and hold still.';loop()}catch(e){$('status').textContent='Camera error: '+e.message+' (GitHub Pages must be HTTPS; allow camera permission.)'}}
-function stop(){mode='idle';cancelAnimationFrame(raf);if(stream)stream.getTracks().forEach(x=>x.stop());stream=null}
-function simulate(){stop();clearAll();mode='sim';$('status').textContent='Simulation mode — validates signal-processing pipeline only.';loop()}
+async function start(){
+ try{
+  await stop();
+  stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'},width:{ideal:1280},height:{ideal:720},frameRate:{ideal:30,max:30}},audio:false});
+  V.srcObject=stream;
+  await V.play().catch(()=>{});
+  videoTrack=stream.getVideoTracks()[0];
+  let caps={};
+  try{caps=videoTrack.getCapabilities?videoTrack.getCapabilities():{};}catch(e){}
+  if(caps.torch){
+    try{
+      await videoTrack.applyConstraints({advanced:[{torch:true}]});
+      torchOn=true;
+      $('torchBtn').textContent='Turn flash OFF';
+      $('status').textContent='Camera + torch ON — cover lens/flash with fingertip and hold still.';
+    }catch(e){
+      $('torchBtn').textContent='Try flash ON';
+      $('status').textContent='Camera active, but automatic torch activation failed. Press Try flash ON.';
+    }
+  }else{
+    $('torchBtn').textContent='Flash not supported';
+    $('status').textContent='Camera active. This browser did not expose torch control for this camera.';
+  }
+  mode='cam';loop();
+ }catch(e){
+  $('status').textContent='Camera error: '+e.message+' (GitHub Pages must be HTTPS; allow camera permission.)';
+ }
+}
+async function stop(){
+ mode='idle';cancelAnimationFrame(raf);
+ if(videoTrack && torchOn){try{await videoTrack.applyConstraints({advanced:[{torch:false}]});}catch(e){}}
+ if(stream)stream.getTracks().forEach(x=>x.stop());
+ stream=null;videoTrack=null;torchOn=false;
+ if($('torchBtn'))$('torchBtn').textContent='Turn flash ON';
+}
 function clearAll(){raw=[];rgb=[];tm=[];f=[];beats=[];['hr','spo2','sv','co','sq','pi'].forEach(x=>$(x).textContent='—');draw()}
 function calibrate(){let s=+$('rsp').value,v=+$('rsv').value;if(s)cal.spo=s;if(v)cal.sv=v;$('status').textContent='Session reference calibration applied.'}
 function resetCal(){cal={spo:null,sv:null};$('status').textContent='Calibration reset.'}
@@ -150,4 +182,24 @@ $('exportBtn').onclick=()=>{
  a.href=URL.createObjectURL(blob);a.download='CardioPPG_validation_'+Date.now()+'.csv';a.click();
 };
 draw();
-</script></body></html>
+</script></body></htmlasync function toggleTorch(){
+ if(!videoTrack || videoTrack.readyState!=='live'){
+  $('status').textContent='Start the camera first, then use the flash button.';
+  return;
+ }
+ try{
+  let caps=videoTrack.getCapabilities?videoTrack.getCapabilities():{};
+  if(!caps.torch){
+   $('torchBtn').textContent='Flash not supported';
+   $('status').textContent='Torch control is not exposed by this phone/browser for the selected camera.';
+   return;
+  }
+  torchOn=!torchOn;
+  await videoTrack.applyConstraints({advanced:[{torch:torchOn}]});
+  $('torchBtn').textContent=torchOn?'Turn flash OFF':'Turn flash ON';
+  $('status').textContent=torchOn?'Camera + torch ON — maintain gentle fingertip contact.':'Camera ON — torch OFF.';
+ }catch(e){
+  $('status').textContent='Torch request failed: '+e.name+'. Camera remains active.';
+ }
+}
+>
