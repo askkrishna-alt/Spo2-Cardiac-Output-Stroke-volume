@@ -80,7 +80,7 @@ function process(){
 }
 function detect(){
  if(f.length<100)return;let n=fs(),s=sd(f),pk=[],last=-999;
- for(let i=2;i<f.length-2;i++){if(tm[i]<tm.at(-1)-12)continue;if(f[i]>f[i-1]&&f[i]>=f[i+1]&&f[i]>f[i-2]&&f[i]>=f[i+2]&&f[i]>.55*s&&i-last>n*.42){pk.push(i);last=i}}
+ for(let i=2;i<f.length-2;i++){if(tm[i]<tm.at(-1)-12)continue;if(f[i]>f[i-1]&&f[i]>=f[i+1]&&f[i]>f[i-2]&&f[i]>=f[i+2]&&f[i]>.75*s&&i-last>n*.50){pk.push(i);last=i}}
  beats=pk.slice(-10).map(i=>morph(i,n));metrics(n);draw();table()
 }
 function morph(k,n){
@@ -96,7 +96,7 @@ function metrics(n){
  let r=f.slice(-Math.round(n*8)),dc=Math.abs(mean(r)),ac=sd(r),pi=dc?100*ac/dc:0;
  let reg=Math.max(0,Math.min(100,100*(1-sd(iv)/Math.max(mean(iv),.001)*2))),quality=Math.min(100,.55*Math.min(100,pi*12)+.45*reg);
  $('pi').textContent=Math.min(99,pi).toFixed(2);$('sq').textContent=quality.toFixed(0);
- $('quality').textContent=quality>70?'Good signal quality.':quality>45?'Usable, but stabilize finger/contact.':'Poor signal — reposition fingertip and reduce movement.';
+ $('quality').textContent=quality>70?'Good signal quality — research estimate only.':quality>45?'Usable, but stabilize finger/contact.':'Poor signal — reposition fingertip and reduce movement.';
  let R=rgb.slice(-Math.round(n*6)),rAC=sd(R.map(x=>x[0])),rDC=Math.max(1,mean(R.map(x=>x[0]))),bAC=sd(R.map(x=>x[2])),bDC=Math.max(1,mean(R.map(x=>x[2])));
  let ratio=(rAC/rDC)/Math.max(.0001,bAC/bDC),spo=cal.spo!=null?cal.spo+(1-ratio)*6:98-(ratio-.75)*7;
  if(quality>45)$('spo2').textContent=Math.max(70,Math.min(100,spo)).toFixed(1);
@@ -105,14 +105,87 @@ function metrics(n){
  $('sv').textContent=sv.toFixed(0);$('co').textContent=(sv*hr/1000).toFixed(2)
 }
 function draw(){
- X.clearRect(0,0,C.width,C.height);X.strokeStyle='#1a2c42';for(let y=30;y<330;y+=50){X.beginPath();X.moveTo(45,y);X.lineTo(1080,y);X.stroke()}
- if(f.length<2)return;let a=f.slice(-900),mn=Math.min(...a),mx=Math.max(...a),sp=mx-mn||1;
- X.strokeStyle='#63d8ff';X.lineWidth=2;X.beginPath();a.forEach((v,i)=>{let x=45+i*1035/(a.length-1),y=320-(v-mn)/sp*280;i?X.lineTo(x,y):X.moveTo(x,y)});X.stroke();
- let off=f.length-a.length;beats.forEach(b=>[[b.pk,'#62e6a3','Systolic'],[b.notch,'#ffd166','Dicrotic notch'],[b.diastolic,'#63d8ff','Diastolic']].forEach(q=>{let j=q[0]-off;if(j<0||j>=a.length)return;let x=45+j*1035/(a.length-1),y=320-(a[j]-mn)/sp*280;X.fillStyle=q[1];X.beginPath();X.arc(x,y,4,0,7);X.fill();X.fillText(q[2],x+5,y-5)}))
+ X.clearRect(0,0,C.width,C.height);
+ // ECG/PPG-style grid
+ X.strokeStyle='#1a2c42'; X.lineWidth=1;
+ for(let y=40;y<=320;y+=56){X.beginPath();X.moveTo(45,y);X.lineTo(1080,y);X.stroke()}
+ for(let x=45;x<=1080;x+=103){X.beginPath();X.moveTo(x,30);X.lineTo(x,330);X.stroke()}
+ if(f.length<2)return;
+
+ // Show the most recent ~8 seconds so individual pulses are visually separated.
+ let n=fs(), count=Math.max(120,Math.min(f.length,Math.round(n*8)));
+ let a=f.slice(-count), mn=med(a)-1.35*sd(a), mx=med(a)+1.35*sd(a);
+ let sp=mx-mn||1;
+ const ymap=v=>310-(v-mn)/sp*260;
+
+ X.strokeStyle='#63d8ff'; X.lineWidth=2.2; X.beginPath();
+ a.forEach((v,i)=>{
+   let x=45+i*1035/(a.length-1),y=ymap(v);
+   y=Math.max(35,Math.min(325,y));
+   i?X.lineTo(x,y):X.moveTo(x,y)
+ }); X.stroke();
+
+ let off=f.length-a.length;
+ let shown=0;
+ beats.forEach(b=>{
+   let j=b.pk-off;
+   if(j<0||j>=a.length)return;
+   let x=45+j*1035/(a.length-1), y=ymap(a[j]);
+   X.fillStyle='#62e6a3'; X.beginPath();X.arc(x,y,4.5,0,Math.PI*2);X.fill();
+   if(shown<3){
+     X.font='12px system-ui';X.fillText('Systolic',x+6,Math.max(35,y-8));
+   }
+   let ni=b.notch-off;
+   if(ni>=0&&ni<a.length){
+     let nx=45+ni*1035/(a.length-1),ny=ymap(a[ni]);
+     X.fillStyle='#ffd166';X.beginPath();X.arc(nx,ny,4,0,Math.PI*2);X.fill();
+     if(shown<3)X.fillText('Dicrotic notch',nx+6,Math.min(325,ny+15));
+   }
+   let di=b.diastolic-off;
+   if(di>=0&&di<a.length){
+     let dx=45+di*1035/(a.length-1),dy=ymap(a[di]);
+     X.fillStyle='#b58cff';X.beginPath();X.arc(dx,dy,4,0,Math.PI*2);X.fill();
+     if(shown<3)X.fillText('Diastolic peak',dx+6,Math.min(325,dy+15));
+   }
+   shown++;
+ });
+
+ // Legend
+ X.font='12px system-ui';
+ X.fillStyle='#62e6a3';X.fillText('● Systolic',55,22);
+ X.fillStyle='#ffd166';X.fillText('● Dicrotic notch',145,22);
+ X.fillStyle='#b58cff';X.fillText('● Diastolic peak',285,22);
+ X.fillStyle='#93a8c2';X.fillText('Recent 8 s',470,22);
 }
 function table(){let n=fs(),h=beats.map((b,i)=>{let p=beats[i-1],d=p?(b.pk-p.pk)/n:0;return '<tr><td>'+(i+1)+'</td><td>'+(p?d.toFixed(3):'—')+'</td><td>'+(p?(60/d).toFixed(0):'—')+'</td><td>'+b.pk+'</td><td>'+b.notch+'</td><td>'+b.diastolic+'</td><td>'+(b.delay*1000).toFixed(0)+' ms</td></tr>'}).join('');$('rows').innerHTML=h||'<tr><td colspan="7">No beats detected.</td></tr>'}
 function push(r,g,b,t){raw.push(-r/255);rgb.push([r,g,b]);tm.push(t);while(tm[0]<t-18){tm.shift();raw.shift();rgb.shift()}process();if(t-(push.last||0)>.12){detect();push.last=t}}
-function loop(){if(mode==='idle')return;let t=performance.now()/1000;if(mode==='sim'){let T=60/72,p=(t%T)/T,y=Math.exp(-Math.pow((p-.18)/.065,2))*1.2-Math.exp(-Math.pow((p-.49)/.035,2))*.28+Math.exp(-Math.pow((p-.60)/.075,2))*.34;push(120-y*30,92-y*8,85-y*4,t);raf=requestAnimationFrame(loop);return}if(V.readyState>=2){let z=document.createElement('canvas'),q=z.getContext('2d');z.width=200;z.height=120;q.drawImage(V,0,0,200,120);let d=q.getImageData(30,20,140,80).data,r=[],g=[],b=[];for(let i=0;i<d.length;i+=4){r.push(d[i]);g.push(d[i+1]);b.push(d[i+2])}push(mean(r),mean(g),mean(b),t)}raf=requestAnimationFrame(loop)}
+const sampleCanvas=document.createElement('canvas');
+sampleCanvas.width=200;sampleCanvas.height=120;
+const sampleCtx=sampleCanvas.getContext('2d',{willReadFrequently:true});
+function loop(){
+ if(mode==='idle')return;
+ let t=performance.now()/1000;
+ if(mode==='sim'){
+   let T=60/72,p=(t%T)/T;
+   // Smooth synthetic PPG with a distinct systolic upstroke, notch and diastolic peak.
+   let y=
+     1.00*Math.exp(-Math.pow((p-.18)/.070,2))
+     -0.23*Math.exp(-Math.pow((p-.46)/.045,2))
+     +0.30*Math.exp(-Math.pow((p-.59)/.085,2));
+   let baseline=.015*Math.sin(2*Math.PI*t/5);
+   let noise=.006*Math.sin(2*Math.PI*t*7.3);
+   let sig=y+baseline+noise;
+   push(120-sig*32,92-sig*9,85-sig*5,t);
+   raf=requestAnimationFrame(loop);return;
+ }
+ if(V.readyState>=2){
+   sampleCtx.drawImage(V,0,0,200,120);
+   let d=sampleCtx.getImageData(30,20,140,80).data,r=[],g=[],b=[];
+   for(let i=0;i<d.length;i+=4){r.push(d[i]);g.push(d[i+1]);b.push(d[i+2])}
+   push(mean(r),mean(g),mean(b),t);
+ }
+ raf=requestAnimationFrame(loop)
+}
 async function start(){
  try{
   await stop();
