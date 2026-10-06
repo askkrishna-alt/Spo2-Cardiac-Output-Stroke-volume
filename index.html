@@ -28,8 +28,11 @@ input{width:90px;background:#081321;color:white;border:1px solid #304862;border-
 <section><h2>Measurements</h2><div class="metrics">
 <div class="m"><span>Pulse rate</span><b id="hr">—</b>bpm</div>
 <div class="m"><span>SpO₂*</span><b id="spo2">—</b>%</div>
-<div class="m"><span>Stroke volume*</span><b id="sv">—</b>mL/beat</div>
+<div class="m"><span>SV — Model A (BP/LZ)</span><b id="svA">—</b>mL/beat</div>
+<div class="m"><span>SV — Model B (PPG/AUC)</span><b id="svB">—</b>mL/beat</div>
 <div class="m"><span>Cardiac output*</span><b id="co">—</b>L/min</div>
+<div class="m"><span>Cardiac index*</span><b id="ci">—</b>L/min/m²</div>
+<div class="m"><span>Personal SV</span><b id="sviPct">—</b>% baseline</div>
 <div class="m"><span>Signal quality</span><b id="sq">—</b>%</div>
 <div class="m"><span>Perfusion index</span><b id="pi">—</b>%</div>
 </div><div id="quality" class="notice">Waiting for a stable signal.</div></section>
@@ -49,6 +52,7 @@ input{width:90px;background:#081321;color:white;border:1px solid #304862;border-
 </section>
 <section><h2>Subject / research calibration</h2>
 <label>Age <input id="age" type="number" value="45"></label>
+<label>Sex <select id="sex"><option value="male">Male</option><option value="female">Female</option><option value="other">Other / unspecified</option></select></label>
 <label>Height cm <input id="ht" type="number" value="170"></label>
 <label>Weight kg <input id="wt" type="number" value="70"></label>
 <label>SBP <input id="sbp" type="number" value="120"></label>
@@ -59,10 +63,22 @@ input{width:90px;background:#081321;color:white;border:1px solid #304862;border-
 <div class="notice">References are session-only. Real validation requires simultaneous reference measurements across subjects, phones and physiological conditions.</div></section>
 </div></div>
 
+<section><h2>Selected pulse morphology</h2>
+<div class="muted">Best-quality recent beat, magnified for visual inspection. The shaded systolic region is the experimental AUC used by Model B.</div>
+<canvas id="beatChart" width="1100" height="330"></canvas>
+<div class="metrics">
+<div class="m"><span>Systolic AUC</span><b id="auc">—</b> normalized units</div>
+<div class="m"><span>Rise time</span><b id="rise">—</b> ms</div>
+<div class="m"><span>Notch delay</span><b id="notchDelay">—</b> ms</div>
+<div class="m"><span>Notch / peak</span><b id="notchRatio">—</b></div>
+</div></section>
+
 <section><h2>Detected beat morphology</h2><table><thead><tr><th>Beat</th><th>IBI</th><th>HR</th><th>Peak</th><th>Dicrotic notch</th><th>Diastolic peak</th><th>Notch delay</th></tr></thead><tbody id="rows"><tr><td colspan="7">No beats detected.</td></tr></tbody></table></section>
 
 <section><h2>Interpretation and limitations</h2>
 <div class="notice">SpO₂ is an experimental camera estimate. Standard pulse oximetry uses differential optical absorption, typically including red and near-infrared wavelengths; ordinary phone cameras do not provide a standardized IR channel.</div>
+<div class="notice">Model A uses the pressure-ratio framework with an experimental demographic prior for BSA/age/sex. If a reference SV is entered, that session becomes personally calibrated. The demographic coefficients are research parameters, not an established clinical equation.</div>
+<div class="notice">Model B uses normalized systolic PPG AUC and morphology. AUC is treated as a calibrated optical feature; raw camera AUC is not assumed to equal millilitres.</div>
 <div class="notice">Stroke volume is not uniquely determined by PPG morphology. The displayed SV/CO is a transparent, calibration-capable research model scaffold using waveform features plus entered BP/body variables, not a validated hemodynamic measurement.</div>
 <div class="notice good">The pipeline performs detrending, approximate band-pass filtering, adaptive peak detection, dicrotic-notch/diastolic-peak detection, signal-quality scoring and RGB feature extraction. Use ECG for HR validation, a validated oximeter/arterial reference for SpO₂, and an accepted hemodynamic reference for SV/CO validation.</div>
 </section></main>
@@ -92,7 +108,8 @@ function morph(k,n){
 }
 function metrics(n){
  let iv=[];for(let i=1;i<beats.length;i++){let d=(beats[i].pk-beats[i-1].pk)/n;if(d>.42&&d<1.5)iv.push(d)}
- if(!iv.length)return;let hr=60/med(iv);$('hr').textContent=hr.toFixed(0);
+ if(!iv.length)return;
+ let hr=60/med(iv);$('hr').textContent=hr.toFixed(0);
  let r=f.slice(-Math.round(n*8)),dc=Math.abs(mean(r)),ac=sd(r),pi=dc?100*ac/dc:0;
  let reg=Math.max(0,Math.min(100,100*(1-sd(iv)/Math.max(mean(iv),.001)*2))),quality=Math.min(100,.55*Math.min(100,pi*12)+.45*reg);
  $('pi').textContent=Math.min(99,pi).toFixed(2);$('sq').textContent=quality.toFixed(0);
@@ -100,9 +117,53 @@ function metrics(n){
  let R=rgb.slice(-Math.round(n*6)),rAC=sd(R.map(x=>x[0])),rDC=Math.max(1,mean(R.map(x=>x[0]))),bAC=sd(R.map(x=>x[2])),bDC=Math.max(1,mean(R.map(x=>x[2])));
  let ratio=(rAC/rDC)/Math.max(.0001,bAC/bDC),spo=cal.spo!=null?cal.spo+(1-ratio)*6:98-(ratio-.75)*7;
  if(quality>45)$('spo2').textContent=Math.max(70,Math.min(100,spo)).toFixed(1);
- let amp=Math.min(.2,Math.max(.001,ac/(Math.abs(dc)+1e-5))),age=+$('age').value||45,sbp=+$('sbp').value||120,dbp=+$('dbp').value||80,map=dbp+(sbp-dbp)/3;
- let base=cal.sv!=null?cal.sv:68,md=mean(beats.map(b=>b.delay)),sv=Math.max(30,Math.min(140,base*(1+amp*2+(md-.22)*.8)*(1+(map-95)*.0025)*(1-(age-45)*.0015)));
- $('sv').textContent=sv.toFixed(0);$('co').textContent=(sv*hr/1000).toFixed(2)
+
+ let age=+$('age').value||45,ht=+$('ht').value||170,wt=+$('wt').value||70,sbp=+$('sbp').value||120,dbp=+$('dbp').value||80;
+ let bsa=Math.sqrt(Math.max(0,ht*wt/3600));
+ let ageFactor=age<=25?1:Math.max(.55,1-(age-25)*.007);
+ let sexFactor=$('sex').value==='female'?.97:1; // provisional research modifier; must be learned/validated later
+ let kDemo=320*(bsa/1.90)*ageFactor*sexFactor;
+ let pressureRatio=(sbp-dbspSafe(dbp))/(sbp+dbspSafe(dbp));
+ let kPersonal=cal.sv!=null && pressureRatio>0 ? cal.sv/pressureRatio : kDemo;
+ let penalty=hr>100?Math.min(.70,(hr-100)*.015):0;
+ let svA=Math.max(20,Math.min(160,kPersonal*pressureRatio*(1-penalty)));
+
+ let best=beats[beats.length-1], mf=beatFeatures(best,n);
+ if(mf){$('auc').textContent=mf.aucNorm.toFixed(3);$('rise').textContent=(mf.rise*1000).toFixed(0);$('notchDelay').textContent=(mf.notchDelay*1000).toFixed(0);$('notchRatio').textContent=mf.notchRatio.toFixed(3);}
+ let svB=svA;
+ if(mf){
+   if(!cal.aucBaseline) cal.aucBaseline=mf.aucNorm;
+   let aucRatio=cal.aucBaseline>0?mf.aucNorm/cal.aucBaseline:1;
+   let morphFactor=Math.max(.65,Math.min(1.35,aucRatio));
+   svB=Math.max(20,Math.min(160,svA*morphFactor));
+ }
+ $('svA').textContent=svA.toFixed(0);$('svB').textContent=svB.toFixed(0);
+ $('co').textContent=(svA*hr/1000).toFixed(2);$('ci').textContent=((svA*hr/1000)/Math.max(.5,bsa)).toFixed(2);
+ if(cal.sv!=null)$('sviPct').textContent=(100*svA/cal.sv).toFixed(0);else $('sviPct').textContent='—';
+ drawBeat(best,n);
+}
+function dbspSafe(v){return Math.max(1,v)}
+function beatFeatures(b,n){
+ if(!b)return null;
+ let onset=Math.max(0,Math.round(b.pk-n*.18)), notch=Math.max(onset+2,Math.min(f.length-1,b.notch));
+ let base=med(f.slice(onset,Math.min(notch,onset+Math.round(n*.25)))), peak=f[b.pk], amp=Math.max(.0001,peak-base);
+ let area=0;for(let i=onset+1;i<=notch;i++)area+=(Math.max(0,f[i]-base)+Math.max(0,f[i-1]-base))/2/n;
+ let aucNorm=area/amp; let rise=(b.pk-onset)/n; let notchRatio=(f[b.notch]-base)/amp;
+ return {onset,notch,aucNorm,rise,notchDelay:(b.notch-b.pk)/n,notchRatio,amp};
+}
+function drawBeat(b,n){
+ const BC=$('beatChart'); if(!BC)return; const Y=BC.getContext('2d');Y.clearRect(0,0,BC.width,BC.height);
+ Y.strokeStyle='#1a2c42';Y.lineWidth=1;for(let y=40;y<=290;y+=50){Y.beginPath();Y.moveTo(45,y);Y.lineTo(1080,y);Y.stroke()}
+ if(!b)return;
+ let onset=Math.max(0,Math.round(b.pk-n*.18)), end=Math.min(f.length-1,Math.round(b.pk+n*.78));
+ let a=f.slice(onset,end+1),mn=med(a)-1.3*sd(a),mx=med(a)+1.3*sd(a),sp=mx-mn||1;
+ let xm=i=>45+i*1035/(a.length-1),ym=v=>285-(v-mn)/sp*225;
+ let bf=beatFeatures(b,n), ni=bf.notch-onset;
+ Y.fillStyle='rgba(98,230,163,.16)';Y.beginPath();Y.moveTo(xm(0),285);for(let i=0;i<=ni;i++)Y.lineTo(xm(i),ym(a[i]));Y.lineTo(xm(ni),285);Y.closePath();Y.fill();
+ Y.strokeStyle='#63d8ff';Y.lineWidth=3;Y.beginPath();a.forEach((v,i)=>i?Y.lineTo(xm(i),ym(v)):Y.moveTo(xm(i),ym(v)));Y.stroke();
+ function dot(idx,label,fill){if(idx<0||idx>=a.length)return;let x=xm(idx),y=ym(a[idx]);Y.fillStyle=fill;Y.beginPath();Y.arc(x,y,6,0,Math.PI*2);Y.fill();Y.font='15px system-ui';Y.fillText(label,x+8,Math.max(25,y-10));}
+ dot(b.pk-onset,'Systolic peak','#62e6a3');dot(b.notch-onset,'Dicrotic notch','#ffd166');dot(b.diastolic-onset,'Diastolic peak','#b58cff');
+ Y.fillStyle='#93a8c2';Y.font='14px system-ui';Y.fillText('Shaded area = experimental systolic AUC',55,320);
 }
 function draw(){
  X.clearRect(0,0,C.width,C.height);
@@ -221,9 +282,9 @@ async function stop(){
  stream=null;videoTrack=null;torchOn=false;
  if($('torchBtn'))$('torchBtn').textContent='Turn flash ON';
 }
-function clearAll(){raw=[];rgb=[];tm=[];f=[];beats=[];['hr','spo2','sv','co','sq','pi'].forEach(x=>$(x).textContent='—');draw()}
-function calibrate(){let s=+$('rsp').value,v=+$('rsv').value;if(s)cal.spo=s;if(v)cal.sv=v;$('status').textContent='Session reference calibration applied.'}
-function resetCal(){cal={spo:null,sv:null};$('status').textContent='Calibration reset.'}
+function clearAll(){raw=[];rgb=[];tm=[];f=[];beats=[];['hr','spo2','svA','svB','co','ci','sviPct','sq','pi','auc','rise','notchDelay','notchRatio'].forEach(x=>$(x).textContent='—');draw()}
+function calibrate(){let s=+$('rsp').value,v=+$('rsv').value;if(s)cal.spo=s;if(v){cal.sv=v;cal.aucBaseline=null;}$('status').textContent='Session reference calibration applied. Entering a reference SV establishes the personal SV anchor.'}
+function resetCal(){cal={spo:null,sv:null,aucBaseline:null};$('status').textContent='Calibration reset.'}
 let validationRows=[],capturing=false,captureStarted=0;
 function captureTick(){
  if(!capturing)return;
@@ -275,4 +336,5 @@ draw();
   $('status').textContent='Torch request failed: '+e.name+'. Camera remains active.';
  }
 }
->
+
+</script></body></html>
